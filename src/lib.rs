@@ -3,6 +3,10 @@ use lazy_static::lazy_static;
 use std::{os::unix::ffi::OsStrExt, path::Path};
 
 lazy_static! {
+    static ref ICONS_INDEX_BYTES: &'static [u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/icons_index.bin"));
+    static ref ICONS_DATA_BYTES: &'static [u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/icons_data.bin"));
     static ref FILENAME_ICONS: Map<&'static [u8]> = {
         const FILENAME_ICONS_BYTES: &[u8] =
             include_bytes!(concat!(env!("OUT_DIR"), "/filename_icons.bin"));
@@ -27,20 +31,48 @@ lazy_static! {
     };
 }
 
+pub fn get_icon_svg(id: u64) -> Option<&'static [u8]> {
+    let id_usize = usize::try_from(id).ok()?;
+    let entry_offset = id_usize.checked_mul(8)?;
+    if entry_offset + 8 > ICONS_INDEX_BYTES.len() {
+        return None;
+    }
+
+    let offset_bytes = &ICONS_INDEX_BYTES[entry_offset..entry_offset + 4];
+    let len_bytes = &ICONS_INDEX_BYTES[entry_offset + 4..entry_offset + 8];
+
+    let offset = u32::from_le_bytes(offset_bytes.try_into().ok()?) as usize;
+    let len = u32::from_le_bytes(len_bytes.try_into().ok()?) as usize;
+
+    if len == 0 {
+        return None;
+    }
+
+    let end = offset.checked_add(len)?;
+    if end > ICONS_DATA_BYTES.len() {
+        return None;
+    }
+
+    Some(&ICONS_DATA_BYTES[offset..end])
+}
+
+/// Returns `None` if the path has no file name (e.g. `/`, `..`, empty) or no matching icon.
 pub fn get_icon_for_file(path: impl AsRef<Path>) -> Option<u64> {
     let path = path.as_ref();
-    let basename = path.file_name().unwrap();
+    let basename = path.file_name()?;
 
     FILENAME_ICONS.get(basename.as_bytes()).or_else(|| {
-        let ext = path.extension().unwrap();
+        // Files without an extension (e.g. `LICENSE`) only match by full name.
+        let ext = path.extension()?;
 
         EXT_ICONS.get(ext.as_bytes())
     })
 }
 
+/// Returns `None` if the path has no folder name (e.g. `/`, `..`, empty) or no matching icon.
 pub fn get_icon_for_folder(path: impl AsRef<Path>) -> Option<u64> {
     let path = path.as_ref();
-    let basename = path.file_name().unwrap();
+    let basename = path.file_name()?;
 
     FOLDER_ICONS.get(basename.as_bytes())
 }
@@ -48,6 +80,18 @@ pub fn get_icon_for_folder(path: impl AsRef<Path>) -> Option<u64> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn embedded_icons() {
+        let svg_0 = get_icon_svg(0);
+        assert!(svg_0.is_some());
+        assert!(svg_0.unwrap().starts_with(b"<svg"));
+
+        let svg_1054 = get_icon_svg(1054);
+        assert!(svg_1054.is_some());
+
+        assert_eq!(get_icon_svg(999999), None);
+    }
 
     #[test]
     fn common_languages() {
@@ -69,5 +113,35 @@ mod test {
         assert_eq!(get_icon_for_folder("./.github"), Some(862));
         assert_eq!(get_icon_for_folder("./src"), Some(1054));
         assert_eq!(get_icon_for_folder("./tests"), Some(1084));
+    }
+
+    #[test]
+    fn no_extension_does_not_panic() {
+        assert_eq!(get_icon_for_file("./some-unknown-file"), None);
+    }
+
+    #[test]
+    fn known_files_without_extension() {
+        assert_eq!(get_icon_for_file("./license"), Some(317));
+        assert_eq!(get_icon_for_file("./gemfile"), Some(52));
+        assert_eq!(get_icon_for_file("./Earthfile"), Some(156));
+        // `Makefile` isn't in the lookup table at all.
+        assert_eq!(get_icon_for_file("./Makefile"), None);
+    }
+
+    /// Lookups are exact (case-sensitive) on purpose; see the README.
+    #[test]
+    fn lookups_are_case_sensitive() {
+        assert_eq!(get_icon_for_file("./LICENSE"), None);
+        assert_eq!(get_icon_for_file("./MAIN.RS"), None);
+        assert_eq!(get_icon_for_folder("./SRC"), None);
+    }
+
+    #[test]
+    fn paths_without_a_name_do_not_panic() {
+        for path in ["", "/", ".."] {
+            assert_eq!(get_icon_for_file(path), None, "file: {path:?}");
+            assert_eq!(get_icon_for_folder(path), None, "folder: {path:?}");
+        }
     }
 }
