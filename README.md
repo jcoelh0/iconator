@@ -18,16 +18,22 @@ You may add these notes at the end of this file if you wish.
 
 ## Solution
 
+### Endpoints
+- `GET /file-icon?path=my-app/src/main.rs` → `{"id": 525}` (or `404` JSON error)
+- `GET /folder-icon?path=my-app/src` → `{"id": 1054}` (or `404` JSON error)
+- `GET /icon/{id}` → `image/svg+xml` with `Cache-Control: public, max-age=31536000, immutable`
+- `GET /health` → `{"status": "ok"}`
+
 ### Design Choices & Tradeoffs
 
-- Picked `axum` on `tokio` for minimal boilerplate, type-safe extractors (`Path`, `Query`, `Json`), and compatibility with the `tower` middleware ecosystem, paired with `axum-test` for HTTP integration tests.
-- Split the API into two steps: `/file-icon` and `/folder-icon` return JSON (`{"id": 525}`) while `/icon/{id}` serves the SVG. Returning the ID instead of the raw SVG lets clients deduplicate requests when 100 `.rs` files in a project tree all map to `/icon/525`.
-- Error handling uses `thiserror` (`EngineError` and `ApiError`) instead of `anyhow` so failure modes are explicit enums that map directly to HTTP status codes and consistent JSON responses (`{"error": "..."}`).
-- Didn't add `Arc<AppState>` since the service has no mutable runtime state; both the FST lookup maps and SVG bytes are immutable and embedded at compile time, avoiding state-passing overhead or locks.
-- Considered pagination, but each query resolves a single path to one icon ID. For an IDE loading a full project tree at once, a `POST /icons/batch` endpoint with a bounded list of paths (e.g. max 500) is a much better fit to avoid hundreds of round-trips.
-- Replaced `.unwrap()` with `?` on `path.file_name()` and `path.extension()` in `get_icon_for_file` and `get_icon_for_folder` so extensionless files (`Makefile`, `LICENSE`) or paths without a basename (`/`, `..`, empty) return `None` (`404`) instead of panicking.
-- Kept lookups case-sensitive rather than lowercasing inputs at runtime. Most entries in `lookup_table.rs` are lowercase (`license`), so `LICENSE` returns `404`, but a few entries are mixed-case (`BUILD.bazel`, `Earthfile`, `Pulumi.yaml`) and would break if inputs were blindly lowercased; this should be solved by normalizing keys in `build.rs` or falling back to lowercase after an exact match.
-- Embedded all SVGs into the binary at compile time (`icons_data.bin` and an 8-byte-per-entry `icons_index.bin` with `(offset, len)` pairs) just like the FST tables. This removes runtime disk I/O, gives $O(1)$ memory slice lookups, and lets `/icon/{id}` serve `Cache-Control: public, max-age=31536000, immutable` so clients and CDNs fetch each SVG only once.
+- **Web framework**: Picked `axum` on `tokio` for minimal boilerplate, type-safe extractors (`Path`, `Query`, `Json`), and compatibility with the `tower` middleware ecosystem, paired with `axum-test` for HTTP integration tests.
+- **Two-step lookup API**: `/file-icon` and `/folder-icon` return JSON (`{"id": 525}`) while `/icon/{id}` serves the SVG. Returning the ID instead of the raw SVG lets clients deduplicate requests when 100 `.rs` files in a project tree all map to `/icon/525`.
+- **Typed error handling**: Uses `thiserror` (`EngineError` and `ApiError`) instead of `anyhow` so failure modes are explicit enums that map directly to HTTP status codes and consistent JSON responses (`{"error": "..."}`).
+- **No shared state (`Arc<AppState>`)**: Omitted since the service has no mutable runtime state; both the FST lookup maps and SVG bytes are immutable and embedded at compile time, avoiding state-passing overhead or locks.
+- **Batching over pagination**: Each query resolves a single path to one icon ID, so pagination does not fit. For an IDE loading a full project tree at once, a `POST /icons/batch` endpoint with a bounded list of paths (e.g. max 500) is a much better fit to avoid hundreds of round-trips.
+- **Panic safety on edge-case paths**: Replaced `.unwrap()` with `?` on `path.file_name()` and `path.extension()` in `get_icon_for_file` and `get_icon_for_folder` so extensionless files (`Makefile`, `LICENSE`) or paths without a basename (`/`, `..`, empty) return `None` (`404`) instead of panicking.
+- **Case sensitivity**: Kept lookups case-sensitive rather than lowercasing inputs at runtime. Most entries in `lookup_table.rs` are lowercase (`license`), so `LICENSE` returns `404`, but a few entries are mixed-case (`BUILD.bazel`, `Earthfile`, `Pulumi.yaml`) and would break if inputs were blindly lowercased; this should be solved by normalizing keys in `build.rs` or falling back to lowercase after an exact match.
+- **Compile-time SVG embedding & caching**: Embedded all SVGs into the binary at compile time (`icons_data.bin` and an 8-byte-per-entry `icons_index.bin` with `(offset, len)` pairs) just like the FST tables. This removes runtime disk I/O, gives $O(1)$ memory slice lookups, and lets `/icon/{id}` serve `Cache-Control: public, max-age=31536000, immutable` so clients and CDNs fetch each SVG only once.
 
 ### Testing
 - 7 unit tests in `src/lib.rs` covering common extensions, folders, extensionless files, embedded SVG lookups, case sensitivity, and panic safety on malformed paths (`""`, `"/"`, `".."`).
@@ -50,7 +56,7 @@ You may add these notes at the end of this file if you wish.
 - **Where human judgment was needed**:
   - AI suggested wrapping Axum's `Path` and `Query` in custom `ValidatedPath` / `ValidatedQuery` extractors and a custom `ApiResult<T>` alias; I removed them since standard `Path`/`Query` and explicit `Result<T, ApiError>` signatures are simpler for any engineer to read.
   - AI initially suggested lowercasing all lookup inputs at runtime so `LICENSE` would match `license`, which would have broken mixed-case keys (`BUILD.bazel`, `Earthfile`) and added per-request allocations.
-  - In `build.rs`, AI initially used two loops and an intermediate `Vec<(u32, u32)>` to build the SVG index, which was less efficient than just zero-initializing the slice (`vec![0u8; (max_id + 1) * 8]`)and using one loop instead.
+  - In `build.rs`, AI initially used two loops and an intermediate `Vec<(u32, u32)>` to build the SVG index, which was less efficient than just zero-initializing the slice (`vec![0u8; (max_id + 1) * 8]`) and using one loop instead.
 
 
 
