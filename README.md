@@ -23,7 +23,7 @@ You may add these notes at the end of this file if you wish.
 cargo run                 # starts server on 0.0.0.0:3000 (or set PORT)
 cargo test                # runs unit and HTTP integration tests
 ```
-Example requests (also available in `example.http`):
+Icons requests (also available in `icons.http`):
 ```bash
 curl "http://localhost:3000/file-icon?path=my-app/src/main.rs"
 curl "http://localhost:3000/folder-icon?path=my-app/src"
@@ -38,14 +38,14 @@ curl "http://localhost:3000/icon/525"
 
 ### Design Choices & Tradeoffs
 
-- **Web framework**: Picked `axum` for minimal boilerplate, type-safe extractors (`Path`, `Query`, `Json`), and compatibility with the `tower` middleware ecosystem, paired with `axum-test` for HTTP integration tests.
-- **Two-step lookup API**: `/file-icon` and `/folder-icon` return JSON (`{"id": 525}`) while `/icon/{id}` serves the SVG. Returning the ID instead of the raw SVG lets clients deduplicate requests when 100 `.rs` files in a project tree all map to `/icon/525`.
-- **Typed error handling**: I preferred using `thiserror` (`EngineError` and `ApiError`) instead of `anyhow` so failure modes are explicit enums that map directly to HTTP status codes and JSON responses (`{"error": "..."}`). For Axum's built-in extractor rejections (`400` on missing `?path=` or non-numeric `/icon/abc`, which default to `text/plain`), I would add a single `axum::middleware::map_response` layer in production to wrap any plain-text `4xx`/`5xx` body into JSON rather than cluttering handlers with custom wrapper extractors.
-- **Panic safety on edge-case paths**: Replaced `.unwrap()` with `?` on `path.file_name()` and `path.extension()` in `get_icon_for_file` and `get_icon_for_folder` so extensionless files (`Makefile`, `LICENSE`) or paths without a basename (`/`, `..`, empty) return `None` (`404`) instead of panicking.
-- **Compile-time SVG embedding & caching**: Embedded all SVGs into the binary at compile time (`icons_data.bin` for SVGs data and an 8-byte per entry `icons_index.bin` with `(offset, len)` pairs) just like the FST tables. This removes runtime disk I/O, gives O(1) memory slice lookups and lets `/icon/{id}` serve `Cache-Control: public, max-age=31536000, immutable` so clients and CDNs fetch each SVG only once.
-- **Case sensitivity**: Kept lookups case-sensitive rather than lowercasing inputs at runtime. Most entries in `lookup_table.rs` are lowercase (`license`), so `LICENSE` returns `404`, but a few entries have capital letters (`BUILD.bazel`, `Earthfile`, `Pulumi.yaml`) and would break if inputs were blindly lowercased. This should be solved by lowercasing all table keys in `build.rs` or falling back to lowercase after an exact match.
-- **No shared state (`Arc<AppState>`)**: Omitted since the service has no mutable runtime state. Both the FST lookup maps and SVG bytes are immutable and embedded at compile time, avoiding state-passing overhead or locks.
-- **Batching over pagination**: Each query resolves a single path to one icon ID, so pagination does not fit. For an IDE loading a full project tree at once, a `POST /icons/batch` endpoint with a bounded list of paths (e.g. max 500) is a much better fit to avoid hundreds of round-trips.
+- Picked `axum` for minimal boilerplate, type-safe extractors (`Path`, `Query`, `Json`), and compatibility with the `tower` middleware ecosystem, paired with `axum-test` for HTTP integration tests.
+- `/file-icon` and `/folder-icon` return JSON (`{"id": 525}`) while `/icon/{id}` serves the SVG. Returning the ID instead of the raw SVG lets clients deduplicate requests when 100 `.rs` files in a project tree all map to `/icon/525`.
+- I preferred using `thiserror` (`EngineError` and `ApiError`) instead of `anyhow` so failure modes are explicit enums that map directly to HTTP status codes and JSON responses (`{"error": "..."}`). For Axum's built-in extractor rejections (`400` on missing `?path=` or non-numeric `/icon/abc`, which default to `text/plain`), I would add a single `axum::middleware::map_response` layer in production to wrap any plain-text `4xx`/`5xx` body into JSON rather than cluttering handlers with custom wrapper extractors.
+- Replaced `.unwrap()` with `?` on `path.file_name()` and `path.extension()` in `get_icon_for_file` and `get_icon_for_folder` so extensionless files (`Makefile`, `LICENSE`) or paths without a basename (`/`, `..`, empty) return `None` (`404`) instead of panicking.
+- Embedded all SVGs into the binary at compile time (`icons_data.bin` for SVGs data and an 8-byte per entry `icons_index.bin` with `(offset, len)` pairs) just like the FST tables. This removes runtime disk I/O, gives O(1) memory slice lookups and lets `/icon/{id}` serve `Cache-Control: public, max-age=31536000, immutable` so clients and CDNs fetch each SVG only once.
+- Kept lookups case-sensitive rather than lowercasing inputs at runtime. Most entries in `lookup_table.rs` are lowercase (`license`), so `LICENSE` returns `404`, but a few entries have capital letters (`BUILD.bazel`, `Earthfile`, `Pulumi.yaml`) and would break if inputs were blindly lowercased. This should be solved by lowercasing all table keys in `build.rs` or falling back to lowercase after an exact match.
+- Decided to not write a shared state (`Arc<AppState>`) since the service has no mutable runtime state. Both the FST lookup maps and SVG bytes are immutable and embedded at compile time, avoiding state-passing overhead or locks.
+- Each query resolves a single path to one icon ID, so pagination does not fit. For an IDE loading a full project tree at once, a new `POST /icons/batch` endpoint with a bounded list of paths (e.g. max 500) is a much better fit to avoid hundreds of round-trips.
 
 ### Testing
 - 7 unit tests in `src/lib.rs` covering common extensions, folders, extensionless files, embedded SVG lookups, case sensitivity, and panic safety on malformed paths (`""`, `"/"`, `".."`).
@@ -59,9 +59,10 @@ curl "http://localhost:3000/icon/525"
 
 ### Product, Team & Business Evolution
 
-- **If teammates don't know Rust**: Right now, adding an icon means editing a Rust file (`icons/lookup_table.rs`) that must stay in strict alphabetical order or the build panics. Moving that mapping to a simple `icons.json` file lets designers or frontend devs add icons without touching Rust, while keeping the server code free of custom macros and exposing an OpenAPI spec makes it easy to work with.
-- **Preparing for business logic changes**: Compile-time embedding is why `get_icon_for_file`, `get_icon_for_folder`, and `get_icon_svg` are synchronous today (they only slice memory and never wait on I/O). If the product adds custom icon themes or live updates without redeploying, we would move assets to external storage (S3 + Redis/in-memory cache) and make those lookup functions `async` so I/O doesn't block Tokio threads.
-- **Framing Cost vs. Risk for Clients**: Choosing Rust carries a higher onboarding cost than other languages, but catches whole classes of bugs at compile time and eliminates GC latency spikes and high cloud bills (one small binary runs on a cheap VM). Similarly, a client can skip paying for batching, external storage, or full tracing to ship an MVP faster, as long as they know the concrete risks they accept.
+- Right now, it is not ready for a team without Rust knowledge since adding an icon means editing a Rust file (`icons/lookup_table.rs`) that must stay in strict alphabetical order or the build panics. Moving that mapping to a simple `icons.json` file lets designers or frontend devs add icons without touching Rust, while keeping the server code free of custom macros and exposing an OpenAPI spec makes it easy to work with.
+- Compile-time embedding is why `get_icon_for_file`, `get_icon_for_folder`, and `get_icon_svg` are synchronous today (they only slice memory and never wait on I/O). If the product adds custom icon themes or live updates without redeploying, we would move assets to external storage (S3 + Redis/in-memory cache) and make those lookup functions `async` so I/O doesn't block Tokio threads. It depends totally on the specific business logic requirements from clients.
+- Choosing Rust carries a higher onboarding cost than other languages, but catches whole classes of bugs at compile time and eliminates GC latency spikes and high cloud bills (one small binary runs on a cheap VM). 
+- If a client wants to launch quickly on a tight budget, we don't even need to build batching, external S3 storage or full tracing on day one. Regardless, we would make the tradeoffs explicit so they can decide. If we skip batching, it would mean a big number of requests on a big project with a lot of files, skipping external storage means a redeploy just to update icons and tracing means production issues take longer to debug.
 
 ### AI-Assisted Workflow Notes
 - **Where AI sped things up**: Scaffolding the Axum routes, `thiserror` (`ApiError` / `EngineError`) definitions, serde request/response structs, `axum-test` integration tests, and the `Ctrl+C` / `SIGTERM` graceful shutdown boilerplate.
