@@ -14,7 +14,8 @@ async fn main() -> Result<(), EngineError> {
 
     let app = init_routes();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
     info!("Listening on {}", listener.local_addr()?);
 
     axum::serve(listener, app)

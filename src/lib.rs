@@ -2,11 +2,10 @@ use fst::Map;
 use lazy_static::lazy_static;
 use std::{os::unix::ffi::OsStrExt, path::Path};
 
+static ICONS_INDEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icons_index.bin"));
+static ICONS_DATA_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icons_data.bin"));
+
 lazy_static! {
-    static ref ICONS_INDEX_BYTES: &'static [u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/icons_index.bin"));
-    static ref ICONS_DATA_BYTES: &'static [u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/icons_data.bin"));
     static ref FILENAME_ICONS: Map<&'static [u8]> = {
         const FILENAME_ICONS_BYTES: &[u8] =
             include_bytes!(concat!(env!("OUT_DIR"), "/filename_icons.bin"));
