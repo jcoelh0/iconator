@@ -1,0 +1,13 @@
+@baseUrl = http://localhost:3000
+
+### Icon SVG by ID
+GET {{baseUrl}}/icon/1
+
+### File icon lookup
+GET {{baseUrl}}/file-icon?path=my-app/src/main.rs
+
+### Folder icon lookup
+GET {{baseUrl}}/folder-icon?path=my-app/src
+
+
+GET {{baseUrl}}/folder-icon?path=my-app/src/Makefile
