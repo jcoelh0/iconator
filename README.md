@@ -54,8 +54,13 @@ curl "http://localhost:3000/icon/525"
 ### Productionizing: Deployment, Observability & Traffic Surges
 
 - With FST maps and SVGs compiled into the binary, the service ships as a single static executable in a distroless container, with `/health` for Kubernetes probes, `Ctrl+C` / `SIGTERM` graceful shutdown draining in-flight requests and bind address/port configured via environment variables.
-- Replace `env_logger` with `tracing` and `tower-http`'s `TraceLayer` for structured JSON logs and OpenTelemetry spans, plus Prometheus metrics for latency, throughput, and `404` miss rates (which also highlights missing extensions in `lookup_table.rs`).
-- Lookups are lock-free and served straight from memory, so a single instance already handles high throughput. For a big surge I would put a CDN in front of `/icon/{id}` (absorbing SVG bandwidth via `Cache-Control: immutable`), add the `POST /icons/batch` endpoint, enable `CompressionLayer` (Gzip/Brotli shrinks SVGs significantly) plus timeouts and rate limiting and autoscale stateless replicas horizontally.
+- Replace `env_logger` with `tracing` and `tower-http`'s `TraceLayer` for structured JSON logs and OpenTelemetry spans, alongside Prometheus metrics for latency, throughput, and `404` miss rates (which also highlights missing extensions in `lookup_table.rs`).
+- Lookups are lock-free and served straight from memory, so a single instance already handles high throughput. For a big surge I would: 
+  - put a CDN in front of `/icon/{id}` (absorbing SVG bandwidth via `Cache-Control: immutable`); 
+  - add the `POST /icons/batch` endpoint;
+  - enable `CompressionLayer` (Gzip/Brotli shrinks SVGs significantly);
+  - timeouts and rate limiting;
+  - autoscale stateless replicas horizontally.
 
 ### Product, Team & Business Evolution
 
